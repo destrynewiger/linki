@@ -9,6 +9,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test:integration": "node --test tests/*.integration.test.mjs",
     "mirror:ee": "node scripts/mirror-ee.js"
   },
   "dependencies": {

@@ -9,6 +9,7 @@ const hasEE = existsSync(join(__dirname, "ee"));
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  distDir: process.env.LINKI_NEXT_DIST_DIR ?? ".next",
   serverExternalPackages: ["better-sqlite3", "playwright", "playwright-extra", "puppeteer-extra-plugin-stealth"],
 
   // OAuth discovery for the hosted MCP server must live at /.well-known/* (RFC 8414 / 9728).
