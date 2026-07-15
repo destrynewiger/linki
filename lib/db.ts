@@ -712,6 +712,21 @@ function initDb(db: Database.Database) {
       PRIMARY KEY (list_id, target_id)
     );
 
+    CREATE TABLE IF NOT EXISTS mcp_signal_events (
+      id TEXT PRIMARY KEY,
+      source TEXT NOT NULL,
+      signal_key TEXT NOT NULL,
+      account_key TEXT NOT NULL,
+      signal_url TEXT NOT NULL,
+      signal_summary TEXT NOT NULL,
+      target_id TEXT REFERENCES targets(id) ON DELETE SET NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(source, account_key, signal_key)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_mcp_signal_events_account
+      ON mcp_signal_events(source, account_key);
+
     CREATE TABLE IF NOT EXISTS templates (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
