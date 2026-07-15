@@ -1,8 +1,7 @@
 services:
   linki:
-    image: moaljumaa/linki:latest
-    # To build from source instead: comment out image above and uncomment below
-    # build: .
+    image: linki:local
+    build: .
     ports:
       - "127.0.0.1:${PORT:-3456}:3000"
     volumes:
@@ -29,5 +28,15 @@ services:
       #
       # Set to "false" to show the browser during automation (debug only)
       # HEADLESS=true
+      #
+      # Bearer token for the review-only MCP endpoint at /api/mcp
+      # Generate with: openssl rand -hex 32
+      # MCP_API_TOKEN=
+      #
+      # IDs for the approved account, workflow, paused run, and list
+      # MCP_ACCOUNT_ID=
+      # MCP_WORKFLOW_ID=
+      # MCP_LIST_ID=
+      # MCP_WRITES_ENABLED=false
 
     restart: unless-stopped
