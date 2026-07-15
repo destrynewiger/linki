@@ -122,8 +122,11 @@ export default function ContactsPage({ lists, total: initialTotal }: { lists: Li
   }, []);
 
   useEffect(() => {
-    fetch_(page, listId, debouncedSearch, filters);
-    setSelected(new Set());
+    const timeout = window.setTimeout(() => {
+      void fetch_(page, listId, debouncedSearch, filters);
+      setSelected(new Set());
+    }, 0);
+    return () => window.clearTimeout(timeout);
   }, [page, listId, debouncedSearch, filters, fetch_]);
 
   function changeList(lid: string) { setListId(lid); setPage(0); }

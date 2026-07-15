@@ -99,7 +99,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
 
     // Assign email accounts: company-grouped round-robin
     // All targets at the same company get the same sender; companies cycle through the pool
-    let emailAssignment: Map<string, string | null> = new Map();
+    const emailAssignment: Map<string, string | null> = new Map();
     if (emailAccountPool.length > 0) {
       // Load company_id for each candidate target
       const targetIds = targets.map(t => t.target_id);

@@ -1445,9 +1445,10 @@ function McpCard() {
   const [mcpUrl, setMcpUrl] = useState("");
 
   useEffect(() => {
-    if (typeof window !== "undefined") {
+    const timeout = window.setTimeout(() => {
       setMcpUrl(`${window.location.origin}/api/mcp`);
-    }
+    }, 0);
+    return () => window.clearTimeout(timeout);
   }, []);
 
   async function copy(text: string) {
