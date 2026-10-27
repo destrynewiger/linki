@@ -12,6 +12,8 @@ const AccountStatusSchema = z.object({
   daily_connection_limit: z.number().int(),
   connections_sent_today: z.number().int(),
   connections_remaining_today: z.number().int(),
+  pending_connection_reservations: z.number().int(),
+  staging_slots_remaining: z.number().int(),
   daily_message_limit: z.number().int(),
   messages_sent_today: z.number().int(),
   messages_remaining_today: z.number().int(),
@@ -41,17 +43,36 @@ export const OutreachStatusSchema = z.object({
 
 export type OutreachStatus = z.infer<typeof OutreachStatusSchema>;
 
+// Accept only public HTTPS profile addresses, never arbitrary runner navigation URLs.
+export function canonicalLinkedInUrl(value: string): string {
+  const url = new URL(value.trim());
+  if (url.protocol !== "https:" || !["www.linkedin.com", "linkedin.com"].includes(url.hostname)
+      || url.username || url.password || url.port
+      || !/^\/in\/[a-zA-Z0-9._-]+\/?$/.test(url.pathname)) {
+    throw new Error("Expected a public HTTPS LinkedIn /in/ profile URL.");
+  }
+  return `https://www.linkedin.com${url.pathname.replace(/\/$/, "")}`;
+}
+
+const ProfileUrlSchema = z.string().trim().max(2048).refine(value => {
+  try { canonicalLinkedInUrl(value); return true; } catch { return false; }
+}, "Expected a public HTTPS LinkedIn /in/ profile URL.");
+const EvidenceUrlSchema = z.string().trim().url().max(2048).refine(value => {
+  const url = new URL(value);
+  return ["https:", "http:"].includes(url.protocol) && !url.username && !url.password;
+}, "Expected an HTTP(S) evidence URL without credentials.");
+
 const StagedProspectSchema = z.object({
-  account_key: z.string().min(1).max(255),
-  signal_key: z.string().min(1).max(255),
-  signal_source: z.string().min(1).max(64),
-  signal_url: z.string().url().max(2048),
-  signal_summary: z.string().min(1).max(2000),
-  linkedin_url: z.string().url().max(2048),
-  first_name: z.string().min(1).max(200),
-  last_name: z.string().min(1).max(200),
-  title: z.string().min(1).max(255),
-  company: z.string().min(1).max(255),
+  account_key: z.string().trim().min(1).max(255),
+  signal_key: z.string().trim().min(1).max(255),
+  signal_source: z.string().trim().min(1).max(64),
+  signal_url: EvidenceUrlSchema,
+  signal_summary: z.string().trim().min(1).max(2000),
+  linkedin_url: ProfileUrlSchema,
+  first_name: z.string().trim().min(1).max(200),
+  last_name: z.string().trim().min(1).max(200),
+  title: z.string().trim().min(1).max(255),
+  company: z.string().trim().min(1).max(255),
 }).strict();
 
 export const StageProspectsInputSchema = z.object({
@@ -89,6 +110,7 @@ type AccountRow = {
   daily_message_limit: number;
   connections_sent_today: number;
   messages_sent_today: number;
+  pending_connection_reservations: number;
 };
 
 type WorkflowRow = {
@@ -102,6 +124,7 @@ type ListRow = {
   id: string;
   name: string;
   target_count: number;
+  purpose: string | null;
 };
 
 export function getOutreachStatus(): OutreachStatus {
@@ -134,23 +157,36 @@ export function getOutreachStatus(): OutreachStatus {
              JOIN runs r ON r.id = l.run_id
              WHERE r.account_id = a.id
                AND l.message LIKE 'Message sent%'
-               AND date(l.created_at) = date('now')) AS messages_sent_today
+               AND date(l.created_at) = date('now')) AS messages_sent_today,
+            (SELECT COUNT(*) FROM run_profiles rp
+             JOIN runs r ON r.id = rp.run_id
+             JOIN run_profile_tracks rt ON rt.run_profile_id = rp.id
+             JOIN targets t ON t.id = rp.target_id
+             WHERE r.account_id = a.id AND r.status IN ('pending', 'paused', 'running')
+               AND rt.track = 'linkedin' AND rt.state NOT IN ('completed', 'failed', 'skipped')
+               AND t.connection_requested_at IS NULL) AS pending_connection_reservations
      FROM accounts a
      WHERE a.id = ?`,
   ).get(accountId) as AccountRow | undefined;
 
-  const workflow = db.prepare(
+  const workflows = db.prepare(
     `SELECT w.id, w.name, r.id AS run_id, r.status AS run_status
      FROM workflows w
      JOIN runs r ON r.workflow_id = w.id
      WHERE w.id = ? AND r.account_id = ? AND r.list_id = ?
        AND r.status IN ('paused', 'running')
-     ORDER BY CASE r.status WHEN 'paused' THEN 0 ELSE 1 END
-     LIMIT 1`,
-  ).get(workflowId, accountId, listId) as WorkflowRow | undefined;
+     ORDER BY r.id`,
+  ).all(workflowId, accountId, listId) as WorkflowRow[];
+  // Ambiguous queues must be repaired explicitly instead of picking an arbitrary run.
+  const workflow = workflows.length === 1 ? workflows[0] : undefined;
+  const steps = db.prepare(
+    'SELECT step_type, track, connect_note FROM workflow_steps WHERE workflow_id = ? AND enabled = 1',
+  ).all(workflowId) as { step_type: string; track: string; connect_note: string | null }[];
+  const blankConnectOnly = steps.length === 1 && steps[0].step_type === 'connect'
+    && steps[0].track === 'linkedin' && !(steps[0].connect_note ?? '').trim();
 
   const list = db.prepare(
-    `SELECT l.id, l.name, COUNT(lt.target_id) AS target_count
+    `SELECT l.id, l.name, l.purpose, COUNT(lt.target_id) AS target_count
      FROM lists l
      LEFT JOIN list_targets lt ON lt.list_id = l.id
      WHERE l.id = ?
@@ -163,17 +199,20 @@ export function getOutreachStatus(): OutreachStatus {
     email: account.email,
     is_authenticated: account.is_authenticated === 1,
     timezone: account.timezone ?? "UTC",
-    daily_connection_limit: Math.min(account.daily_connection_limit, OUTREACH_DAILY_LIMIT),
+    daily_connection_limit: account.daily_connection_limit,
     connections_sent_today: account.connections_sent_today,
     connections_remaining_today: Math.max(
       0,
       Math.min(account.daily_connection_limit, OUTREACH_DAILY_LIMIT) - account.connections_sent_today,
     ),
-    daily_message_limit: Math.min(account.daily_message_limit, OUTREACH_DAILY_LIMIT),
+    pending_connection_reservations: account.pending_connection_reservations,
+    staging_slots_remaining: Math.max(0, Math.min(account.daily_connection_limit, OUTREACH_DAILY_LIMIT)
+      - account.connections_sent_today - account.pending_connection_reservations),
+    daily_message_limit: account.daily_message_limit,
     messages_sent_today: account.messages_sent_today,
     messages_remaining_today: Math.max(
       0,
-      Math.min(account.daily_message_limit, OUTREACH_DAILY_LIMIT) - account.messages_sent_today,
+      account.daily_message_limit - account.messages_sent_today,
     ),
   } : null;
 
@@ -193,6 +232,10 @@ export function getOutreachStatus(): OutreachStatus {
   const configurationValid = Boolean(
     normalizedAccount &&
     normalizedAccount.is_authenticated &&
+    Number.isInteger(normalizedAccount.daily_connection_limit) &&
+    normalizedAccount.daily_connection_limit > 0 &&
+    normalizedAccount.daily_connection_limit <= OUTREACH_DAILY_LIMIT &&
+    blankConnectOnly && list?.purpose === "linkedin" &&
     normalizedWorkflow?.run_status === "paused" &&
     normalizedList,
   );
@@ -209,6 +252,12 @@ export function getOutreachStatus(): OutreachStatus {
 
 export function stageProspects(input: StageProspectsInput): StageProspectsOutput {
   const parsed = StageProspectsInputSchema.parse(input);
+  for (const prospect of parsed.prospects) prospect.linkedin_url = canonicalLinkedInUrl(prospect.linkedin_url);
+  // Serialize validation, reservation accounting, and insertion across processes.
+  return getDb().transaction(() => stageInTransaction(parsed)).immediate();
+}
+
+function stageInTransaction(parsed: StageProspectsInput): StageProspectsOutput {
   const status = getOutreachStatus();
   if (!status.writes_enabled) {
     throw new Error("Staging is disabled. Set MCP_WRITES_ENABLED=true after reviewing the configured queue.");
@@ -219,22 +268,8 @@ export function stageProspects(input: StageProspectsInput): StageProspectsOutput
   const account = status.account;
   const workflow = status.workflow;
   const list = status.list;
-  if (parsed.prospects.length > account.connections_remaining_today) {
-    throw new Error(
-      `Batch has ${parsed.prospects.length} prospects but only ${account.connections_remaining_today} connection slots remain today.`,
-    );
-  }
-
+  let slots = account.staging_slots_remaining;
   const db = getDb();
-  const blankConnectStep = db.prepare(
-    `SELECT id FROM workflow_steps
-     WHERE workflow_id = ? AND step_type = 'connect' AND enabled = 1
-       AND COALESCE(TRIM(connect_note), '') = ''
-     LIMIT 1`,
-  ).get(workflow.id);
-  if (!blankConnectStep) {
-    throw new Error("The configured workflow must contain an enabled connect step with a blank connection note.");
-  }
 
   const counts = {
     staged: 0,
@@ -248,12 +283,13 @@ export function stageProspects(input: StageProspectsInput): StageProspectsOutput
   };
 
   const findSignal = db.prepare(
-    "SELECT id FROM mcp_signal_events WHERE source = ? AND account_key = ? AND signal_key = ?",
+    `SELECT e.id, t.linkedin_url FROM mcp_signal_events e LEFT JOIN targets t ON t.id = e.target_id
+     WHERE e.source = ? AND e.account_key = ? AND e.signal_key = ?`,
   );
   const findAccountSignal = db.prepare(
     "SELECT id FROM mcp_signal_events WHERE source = ? AND account_key = ? LIMIT 1",
   );
-  const findTarget = db.prepare("SELECT id FROM targets WHERE linkedin_url = ?");
+  const findTargets = db.prepare("SELECT id, linkedin_url FROM targets WHERE linkedin_url LIKE ? ESCAPE '!' OR linkedin_url LIKE ? ESCAPE '!'");
   const insertTarget = db.prepare(
     `INSERT INTO targets
       (id, linkedin_url, first_name, last_name, full_name, title, company)
@@ -285,7 +321,7 @@ export function stageProspects(input: StageProspectsInput): StageProspectsOutput
   const activeElsewhere = db.prepare(
     `SELECT 1 FROM run_profiles rp
      JOIN runs r ON r.id = rp.run_id
-     WHERE rp.target_id = ? AND r.status IN ('running', 'paused')
+     WHERE rp.target_id = ? AND r.status IN ('pending', 'running', 'paused')
        AND r.id != ?
        AND EXISTS (
          SELECT 1 FROM run_profile_tracks rt
@@ -303,84 +339,85 @@ export function stageProspects(input: StageProspectsInput): StageProspectsOutput
      VALUES (?, ?, 'linkedin', 'pending', 0)`,
   );
 
-  db.transaction(() => {
-    const pausedRun = db.prepare(
-      `SELECT 1 FROM runs
-       WHERE id = ? AND workflow_id = ? AND list_id = ? AND account_id = ?
-         AND status = 'paused'`,
-    ).get(workflow.run_id, workflow.id, list.id, account.id);
-    if (!pausedRun) {
-      throw new Error("The configured run is no longer paused. No prospects were staged.");
+  for (const prospect of parsed.prospects) {
+    const signalSource = prospect.signal_source.trim().toLowerCase();
+    const accountKey = prospect.account_key.trim().toLowerCase();
+    const signalKey = prospect.signal_key.trim();
+
+    const priorSignal = findSignal.get(signalSource, accountKey, signalKey) as { linkedin_url: string | null } | undefined;
+    if (priorSignal) {
+      if (!priorSignal.linkedin_url || canonicalLinkedInUrl(priorSignal.linkedin_url) !== prospect.linkedin_url) {
+        throw new Error("Signal key is already bound to a different or deleted profile. No prospects were staged.");
+      }
+      counts.duplicate_signals += 1;
+      continue;
     }
 
-    for (const prospect of parsed.prospects) {
-      const signalSource = prospect.signal_source.trim().toLowerCase();
-      const accountKey = prospect.account_key.trim().toLowerCase();
-      const signalKey = prospect.signal_key.trim();
+    const isNewAccount = !findAccountSignal.get(signalSource, accountKey);
 
-      if (findSignal.get(signalSource, accountKey, signalKey)) {
-        counts.duplicate_signals += 1;
-        continue;
-      }
-
-      const isNewAccount = !findAccountSignal.get(signalSource, accountKey);
-
-      const existingTarget = findTarget.get(prospect.linkedin_url) as { id: string } | undefined;
-      const targetId = existingTarget?.id ?? randomUUID();
-      const fullName = `${prospect.first_name} ${prospect.last_name}`.trim();
-      if (existingTarget) {
-        fillTarget.run(
-          prospect.first_name,
-          prospect.last_name,
-          fullName,
-          prospect.title,
-          prospect.company,
-          targetId,
-        );
-      } else {
-        insertTarget.run(
-          targetId,
-          prospect.linkedin_url,
-          prospect.first_name,
-          prospect.last_name,
-          fullName,
-          prospect.title,
-          prospect.company,
-        );
-        counts.created_targets += 1;
-      }
-
-      insertSignal.run(
-        randomUUID(),
-        signalSource,
-        signalKey,
-        accountKey,
-        prospect.signal_url,
-        prospect.signal_summary,
+    const profilePath = new URL(prospect.linkedin_url).pathname.replace(/[!%_]/g, "!$&");
+    const candidates = findTargets.all(`https://www.linkedin.com${profilePath}%`, `https://linkedin.com${profilePath}%`) as { id: string; linkedin_url: string }[];
+    const matchingTargets = candidates.filter(target => {
+      try { return canonicalLinkedInUrl(target.linkedin_url) === prospect.linkedin_url; } catch { return false; }
+    });
+    if (matchingTargets.length > 1) throw new Error("Multiple existing targets match this profile. Reconcile them before staging.");
+    const existingTarget = matchingTargets[0];
+    const targetId = existingTarget?.id ?? randomUUID();
+    const fullName = `${prospect.first_name} ${prospect.last_name}`.trim();
+    if (existingTarget) {
+      fillTarget.run(
+        prospect.first_name,
+        prospect.last_name,
+        fullName,
+        prospect.title,
+        prospect.company,
         targetId,
       );
-      counts.staged += 1;
-      if (isNewAccount) counts.new_accounts += 1;
-
-      if (addToList.run(list.id, targetId).changes > 0) {
-        counts.added_to_list += 1;
-      }
-
-      if (alreadyEnrolled.get(workflow.id, targetId)) {
-        counts.skipped_already_enrolled += 1;
-        continue;
-      }
-      if (activeElsewhere.get(targetId, workflow.run_id)) {
-        counts.skipped_active_elsewhere += 1;
-        continue;
-      }
-
-      const runProfileId = randomUUID();
-      insertProfile.run(runProfileId, workflow.run_id, targetId);
-      insertTrack.run(randomUUID(), runProfileId);
-      counts.enrolled += 1;
+    } else {
+      insertTarget.run(
+        targetId,
+        prospect.linkedin_url,
+        prospect.first_name,
+        prospect.last_name,
+        fullName,
+        prospect.title,
+        prospect.company,
+      );
+      counts.created_targets += 1;
     }
-  })();
+
+    insertSignal.run(
+      randomUUID(),
+      signalSource,
+      signalKey,
+      accountKey,
+      prospect.signal_url,
+      prospect.signal_summary,
+      targetId,
+    );
+    counts.staged += 1;
+    if (isNewAccount) counts.new_accounts += 1;
+
+    if (addToList.run(list.id, targetId).changes > 0) {
+      counts.added_to_list += 1;
+    }
+
+    if (alreadyEnrolled.get(workflow.id, targetId)) {
+      counts.skipped_already_enrolled += 1;
+      continue;
+    }
+    if (activeElsewhere.get(targetId, workflow.run_id)) {
+      counts.skipped_active_elsewhere += 1;
+      continue;
+    }
+
+    if (slots <= 0) throw new Error("No unreserved connection slots remain today. No prospects were staged.");
+    slots -= 1;
+    const runProfileId = randomUUID();
+    insertProfile.run(runProfileId, workflow.run_id, targetId);
+    insertTrack.run(randomUUID(), runProfileId);
+    counts.enrolled += 1;
+  }
 
   return StageProspectsOutputSchema.parse({
     run_id: workflow.run_id,

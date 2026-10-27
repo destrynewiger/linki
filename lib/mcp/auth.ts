@@ -17,3 +17,15 @@ export function hasValidMcpBearerToken(req: NextApiRequest): boolean {
 
   return timingSafeEqual(digest(provided), digest(expected));
 }
+
+// Native clients may omit Origin. Browser clients must match the configured origin;
+// never derive trust from an attacker-controlled Host or X-Forwarded-* header.
+export function hasValidMcpOrigin(req: NextApiRequest): boolean {
+  const origin = req.headers.origin;
+  if (origin === undefined) return true;
+  if (typeof origin !== "string" || !process.env.NEXTAUTH_URL) return false;
+  try {
+    const configured = new URL(process.env.NEXTAUTH_URL);
+    return ["http:", "https:"].includes(configured.protocol) && origin === configured.origin;
+  } catch { return false; }
+}
