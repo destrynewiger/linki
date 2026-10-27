@@ -13,19 +13,15 @@ import { isAuthenticated } from "@/lib/auth";
 //                                   registration — no user session exists at this step.
 //  - /api/oauth/metadata-*          RFC 8414/9728 discovery documents, fetched before any
 //                                   auth exists by design.
-//  - /api/mcp                       Verifies its own Bearer token (lib/premium.ts boundary —
-//                                   this file can't import that ee-only check) and, on
-//                                   failure, must reply with a WWW-Authenticate header
-//                                   pointing at OAuth discovery (RFC 9728) so MCP clients
-//                                   can bootstrap the auth flow. A generic 401 here would
-//                                   swallow that header and break every MCP client's first
-//                                   connection attempt.
-const PUBLIC_API_PREFIXES = ["/api/auth/", "/api/oauth/", "/api/mcp"];
+//  - /api/mcp                       Validates its own dedicated bearer token and Origin.
+//                                   This self-hosted endpoint does not implement OAuth.
+const PUBLIC_API_PREFIXES = ["/api/auth/", "/api/oauth/"];
 
 export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   if (!pathname.startsWith("/api/")) return NextResponse.next();
+  if (pathname === "/api/mcp" || pathname === "/api/mcp/") return NextResponse.next();
   if (PUBLIC_API_PREFIXES.some(p => pathname.startsWith(p))) return NextResponse.next();
 
   const authed = await isAuthenticated(req);

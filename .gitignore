@@ -3,6 +3,7 @@
 # dependencies
 /node_modules
 /mcp/node_modules
+/.next-integration-*
 /.pnp
 .pnp.*
 .yarn/*

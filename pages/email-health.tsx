@@ -48,7 +48,10 @@ export default function EmailHealth() {
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const timeout = window.setTimeout(load, 0);
+    return () => window.clearTimeout(timeout);
+  }, [load]);
 
   // Auto-refresh every 60s
   useEffect(() => {

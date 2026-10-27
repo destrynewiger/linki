@@ -134,21 +134,34 @@ AUTH_PASSWORD=your_password_here
 **2. Start the container**
 
 ```bash
-docker compose up -d
+docker compose up --build -d
 ```
 
-Or pull the image directly:
-
-```bash
-docker run -d -p 3456:3000 \
-  -e NEXTAUTH_URL=http://localhost:3456 \
-  -e NEXTAUTH_SECRET=your_random_secret_here \
-  -e AUTH_PASSWORD=your_password_here \
-  -v $(pwd)/data:/data \
-  moaljumaa/linki:latest
-```
+This builds the current checkout and starts it with the settings in
+`.env.local`.
 
 Linki is now running at `http://localhost:3456`. The SQLite database is persisted in `./data/linki.db` on your host machine.
+
+### Self-host with Apple container
+
+Apple's runtime requires Apple silicon and macOS 26. See the
+[review-only MCP and container runbook](docs/MCP_APPLE_CONTAINER.md) for isolated
+build commands, private environment setup, UID ownership, verification and rollback.
+Native Apple engine verification is still required on a supported host.
+
+### MCP endpoint
+
+The Streamable HTTP endpoint is `http://localhost:3456/api/mcp`. It requires `Authorization: Bearer <MCP_API_TOKEN>` and exposes two tools:
+
+- `get_outreach_status` reads the approved account, paused queue, and remaining daily capacity.
+- `stage_prospects` adds reviewed prospects to that paused queue. It is idempotent by source signal, reserves available capacity, requires an actual account connection limit of 1–25 and a single blank-connect workflow, and never starts the run.
+
+Generate and store a dedicated bearer secret privately. After creating the account, list, workflow, and paused run in the UI, set `MCP_ACCOUNT_ID`, `MCP_LIST_ID`, and `MCP_WORKFLOW_ID` in `.env.local`. Keep `MCP_WRITES_ENABLED=false` until those IDs have been reviewed, then restart the container with the same arguments.
+
+For a tunnel at `https://linki.example.ngrok.app`, give the cloud agent `https://linki.example.ngrok.app/api/mcp`, not the Linki UI root URL.
+
+For the exact queue contract, authentication boundary, deployment and rollback,
+see [Linki MCP on Apple Container](docs/MCP_APPLE_CONTAINER.md).
 
 ### Self-host manually (Node.js)
 
@@ -171,6 +184,10 @@ Go to **Settings → LinkedIn** and add your account. Set conservative daily lim
 ### 2. Authenticate LinkedIn
 
 Click **Authenticate** and use **Server login** — Linki logs in on the server and walks you through LinkedIn's verification (email/SMS code or a tap in the LinkedIn mobile app). This captures a full, long-lived session, including the Sales Navigator seat needed for imports.
+
+Verify the intended operator, company scope and current account identity through
+your approved login process. A stored authenticated flag does not prove a current
+session. Never copy another operator's cookies or sessions to configure MCP.
 
 ### 3. Add email accounts (optional)
 

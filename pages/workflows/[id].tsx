@@ -2390,13 +2390,39 @@ const STEP_TYPE_LABEL: Record<string, string> = {
   visit: "Visit", connect: "Connect", message: "LI Message", sales_inmail: "InMail", email: "Email",
 };
 
+function AnalyticsFunnelBar({
+  label,
+  value,
+  color,
+  total,
+  max,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  total: number;
+  max: number;
+}) {
+  const pct = Math.max(2, (value / max) * 100);
+  const rate = total > 0 ? Math.round((value / total) * 100) : 0;
+  return (
+    <div className="flex items-center gap-3 py-2">
+      <span className="text-xs text-base-content/50 w-28 shrink-0">{label}</span>
+      <div className="flex-1 h-1.5 bg-base-300/30 rounded-full overflow-hidden">
+        <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, background: color }} />
+      </div>
+      <span className="text-sm font-semibold tabular-nums w-12 text-right" style={{ color }}>{value.toLocaleString()}</span>
+      <span className="text-xs text-base-content/30 w-8 text-right">{rate}%</span>
+    </div>
+  );
+}
+
 function AnalyticsPanel({ workflowId, days: initialDays }: { workflowId: string; days: number }) {
   const [data, setData] = useState<AnalyticsData | null>(null);
   const [days, setDays] = useState(initialDays);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setLoading(true);
     fetch(`/api/workflows/${workflowId}/analytics?days=${days}`)
       .then(r => r.json())
       .then(d => { setData(d); setLoading(false); })
@@ -2420,21 +2446,6 @@ function AnalyticsPanel({ workflowId, days: initialDays }: { workflowId: string;
   const hasAiData = totalAiCost > 0;
   const labelEvery = days <= 7 ? 1 : days <= 14 ? 2 : days <= 30 ? 5 : 15;
 
-  function FunnelBar({ label, value, color }: { label: string; value: number; color: string }) {
-    const pct = Math.max(2, (value / maxFunnel) * 100);
-    const rate = funnel.total > 0 ? Math.round((value / funnel.total) * 100) : 0;
-    return (
-      <div className="flex items-center gap-3 py-2">
-        <span className="text-xs text-base-content/50 w-28 shrink-0">{label}</span>
-        <div className="flex-1 h-1.5 bg-base-300/30 rounded-full overflow-hidden">
-          <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, background: color }} />
-        </div>
-        <span className="text-sm font-semibold tabular-nums w-12 text-right" style={{ color }}>{value.toLocaleString()}</span>
-        <span className="text-xs text-base-content/30 w-8 text-right">{rate}%</span>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-5 pb-8">
       {/* Day picker */}
@@ -2444,7 +2455,7 @@ function AnalyticsPanel({ workflowId, days: initialDays }: { workflowId: string;
           {DAY_OPTS.map(d => (
             <button
               key={d}
-              onClick={() => setDays(d)}
+              onClick={() => { setLoading(true); setDays(d); }}
               className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all ${days === d ? "bg-base-100 text-base-content shadow-sm" : "text-base-content/35 hover:text-base-content/60"}`}
             >
               {d}d
@@ -2611,16 +2622,16 @@ function AnalyticsPanel({ workflowId, days: initialDays }: { workflowId: string;
               <span className="text-xs font-medium text-base-content/30 uppercase tracking-widest">Funnel</span>
             </div>
             <div className="space-y-0.5">
-              <FunnelBar label="Prospects" value={funnel.total} color="#808080" />
-              <FunnelBar label="Connections sent" value={funnel.connections_sent} color="#32d583" />
-              <FunnelBar label="Connected" value={funnel.connected} color="#32d583" />
-              <FunnelBar label="LI Messages" value={funnel.messages_sent} color="#f4b740" />
-              <FunnelBar label="InMails sent" value={funnel.inmails_sent} color="#e879f9" />
-              <FunnelBar label="LI Replies" value={funnel.li_replies} color="#c084fc" />
-              <FunnelBar label="Emails sent" value={funnel.emails_sent} color="#fb923c" />
-              <FunnelBar label="Email replies" value={funnel.email_replies} color="#32d583" />
+              <AnalyticsFunnelBar label="Prospects" value={funnel.total} color="#808080" total={funnel.total} max={maxFunnel} />
+              <AnalyticsFunnelBar label="Connections sent" value={funnel.connections_sent} color="#32d583" total={funnel.total} max={maxFunnel} />
+              <AnalyticsFunnelBar label="Connected" value={funnel.connected} color="#32d583" total={funnel.total} max={maxFunnel} />
+              <AnalyticsFunnelBar label="LI Messages" value={funnel.messages_sent} color="#f4b740" total={funnel.total} max={maxFunnel} />
+              <AnalyticsFunnelBar label="InMails sent" value={funnel.inmails_sent} color="#e879f9" total={funnel.total} max={maxFunnel} />
+              <AnalyticsFunnelBar label="LI Replies" value={funnel.li_replies} color="#c084fc" total={funnel.total} max={maxFunnel} />
+              <AnalyticsFunnelBar label="Emails sent" value={funnel.emails_sent} color="#fb923c" total={funnel.total} max={maxFunnel} />
+              <AnalyticsFunnelBar label="Email replies" value={funnel.email_replies} color="#32d583" total={funnel.total} max={maxFunnel} />
               <div className="pt-2 border-t border-base-300/30 mt-2">
-                <FunnelBar label="Completed" value={funnel.completed} color="#5aa2ff" />
+                <AnalyticsFunnelBar label="Completed" value={funnel.completed} color="#5aa2ff" total={funnel.total} max={maxFunnel} />
               </div>
             </div>
           </div>
@@ -2712,11 +2723,17 @@ export default function WorkflowDetailPage({
   }, [initial.id]);
 
   // Reset to page 0 when filter/search changes
-  useEffect(() => { setProspectsPage(0); }, [selectedStep, search, prospectFilters]);
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setProspectsPage(0), 0);
+    return () => window.clearTimeout(timeout);
+  }, [selectedStep, search, prospectFilters]);
 
   useEffect(() => {
-    refreshStats();
-    refreshProspects();
+    const timeout = window.setTimeout(() => {
+      void refreshStats();
+      void refreshProspects();
+    }, 0);
+    return () => window.clearTimeout(timeout);
   }, [refreshStats, refreshProspects]);
 
   useEffect(() => {
